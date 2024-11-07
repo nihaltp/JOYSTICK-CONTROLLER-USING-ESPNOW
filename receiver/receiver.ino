@@ -13,12 +13,13 @@ const int R1  = D3; // Right 1
 const int R2  = D4; // Right 2
 const int ENR = D5; // Right Enable
 
-const int DEAD_ZONE = 10; // To Avoid Unnecessary movements when joystick close to center
+const int DEAD_ZONE = 10; // To Avoid Unnecessary movements when joystick close to center // TODO: Change
 const int JS_MAX = 1023; // Maximum value of Joystick
-const int X_CENTER = 495; // Value of X axis when joystick is untouched // TODO: Change
-const int Y_CENTER = 498; // Value of Y axis when joystick is untouched // TODO: Change
+int X_CENTER = 0; // Value of X axis when joystick is untouched
+int Y_CENTER = 0; // Value of Y axis when joystick is untouched
 const int WORKING_RANGE = 255; // Maximum value of PWM
 boolean SERIAL_PORT = true;  // Change to false if Serial monitor is not needed // TODO: Change
+const int numSamples = 100; // Number of samples to average to find X_CENTER and Y_CENTER // TODO: Change
 
 typedef struct packetData {
   int x;
@@ -50,11 +51,13 @@ void setup() {
   
   // Initialize ESP-NOW
   while (esp_now_init() != 0) {
-    Serial.println("Error initializing ESP-NOW");
+    Serial.print(".");
   } Serial.println("ESP-NOW Initialized Successfully");
   
   esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
   esp_now_register_recv_cb(onReceive);
+  
+  calibrateJoystick();
   
   pinMode(L1,  OUTPUT);
   pinMode(L2,  OUTPUT);
@@ -65,6 +68,50 @@ void setup() {
 }
 
 void loop() {}
+
+void calibrateJoystick() {
+  int xArray[numSamples];      // Array to store X-axis values
+  int yArray[numSamples];      // Array to store Y-axis values
+  long xSum = 0, ySum = 0;     // Sum of X-axis and Y-axis values
+  int xError = 0, yError = 0;  // Counter for X-axis and Y-axis Error
+  
+  for (int i = 0; i < numSamples; i++) {
+    xArray[i] = controls.x;
+    yArray[i] = controls.y;
+    delay(10);
+  }
+  for (int i = 0; i < numSamples; i++) {
+    xSum += xArray[i];
+    ySum += yArray[i];
+  }
+  
+  int xMean = xSum / numSamples;  // Mean for X-axis
+  int yMean = ySum / numSamples;  // Mean for Y-axis
+  xSum = 0;
+  ySum = 0;
+  
+  for (int i = 0; i < numSamples; i++) {
+    if (abs(xArray[i] - xMean) < DEAD_ZONE) {
+      xSum += xArray[i];
+    } else {
+      xError++;
+    }
+    if (abs(yArray[i] - yMean) < DEAD_ZONE) {
+      ySum += yArray[i];
+    } else {
+      yError++;
+    }
+  }
+  
+  X_CENTER = xSum / (numSamples - xError);
+  Y_CENTER = ySum / (numSamples - yError);
+  
+  if (SERIAL_PORT) {
+    Serial.println("Calibration complete.");
+    Serial.print("X_CENTER: ");  Serial.print(X_CENTER);
+    Serial.print("\tY_CENTER: ");  Serial.println(Y_CENTER);
+  }
+}
 
 void simpleMovements () {
   int xMapped, yMapped;
@@ -89,21 +136,10 @@ void simpleMovements () {
 }
 
 void handleJoystickInput(int x, int y, int &xMapped, int &yMapped) {
-  if (x > X_CENTER) {
-    xMapped = map(x, X_CENTER, JS_MAX, 0, WORKING_RANGE);
-  } else if (x < X_CENTER) {
-    xMapped = map(x, 0, X_CENTER , -1 * WORKING_RANGE , 0);
-  } else {
-    xMapped = 0;
-  }
-  if (y > Y_CENTER) {
-    yMapped = map(y, Y_CENTER, JS_MAX, 0, WORKING_RANGE);
-  } else if (y < Y_CENTER) {
-    yMapped = map(y, 0, Y_CENTER , -1 * WORKING_RANGE , 0);
-  } else {
-    yMapped = 0;
-  }
-  return;
+  xMapped = (x > X_CENTER) ? map(x, X_CENTER, JS_MAX, 0, WORKING_RANGE) :
+            (x < X_CENTER) ? map(x, 0, X_CENTER, -WORKING_RANGE, 0) : 0;
+  yMapped = (y > Y_CENTER) ? map(y, Y_CENTER, JS_MAX, 0, WORKING_RANGE) :
+            (y < Y_CENTER) ? map(y, 0, Y_CENTER, -WORKING_RANGE, 0) : 0;
 }
 
 void calculateMotorSpeeds(int x, int y, int &left, int &right) {
@@ -149,12 +185,10 @@ int calculateBackwardSpeed(int a, int b) {
 }
 
 void rotateMotors(int x, int y) {
-  int leftSpeed = (x > 0) ? x : -x;
-  int rightSpeed = (y > 0) ? y : -y;
   digitalWrite(L1, (x > 0) ? HIGH : LOW);
   digitalWrite(L2, (x < 0) ? HIGH : LOW);
-  analogWrite(ENL, leftSpeed);
+  analogWrite(ENL, abs(x));
   digitalWrite(R1, (y > 0) ? HIGH : LOW);
   digitalWrite(R2, (y < 0) ? HIGH : LOW);
-  analogWrite(ENR, rightSpeed);
+  analogWrite(ENR, abs(y));
 }
